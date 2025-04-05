@@ -1,0 +1,569 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<WorkflowBuilder Version="2.7.3"
+                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xmlns:io="clr-namespace:Bonsai.IO;assembly=Bonsai.System"
+                 xmlns:rx="clr-namespace:Bonsai.Reactive;assembly=Bonsai.Core"
+                 xmlns:cv="clr-namespace:Bonsai.Vision;assembly=Bonsai.Vision"
+                 xmlns:ipy="clr-namespace:Bonsai.Scripting.IronPython;assembly=Bonsai.Scripting.IronPython"
+                 xmlns="https://bonsai-rx.org/2018/workflow">
+  <Workflow>
+    <Nodes>
+      <Expression xsi:type="ExternalizedMapping">
+        <Property Name="saveFolder" />
+      </Expression>
+      <Expression xsi:type="ExternalizedMapping">
+        <Property Name="Path" DisplayName="clipDir" />
+      </Expression>
+      <Expression xsi:type="Combinator">
+        <Combinator xsi:type="io:GetFiles">
+          <io:Path>R:\UusisaariU\PROCESSED_DATA_BACKUPS\nRIM_MEMBERS\Salvo\flir_cameras\M322_336\19April2024\top_cam</io:Path>
+          <io:SearchPattern>*.avi</io:SearchPattern>
+          <io:SearchOption>AllDirectories</io:SearchOption>
+        </Combinator>
+      </Expression>
+      <Expression xsi:type="Combinator">
+        <Combinator xsi:type="rx:Concat" />
+      </Expression>
+      <Expression xsi:type="rx:CreateObservable">
+        <Name>ProcessVideo</Name>
+        <Workflow>
+          <Nodes>
+            <Expression xsi:type="SubscribeSubject">
+              <Name>FileName</Name>
+            </Expression>
+            <Expression xsi:type="PropertyMapping">
+              <PropertyMappings>
+                <Property Name="FileName" />
+              </PropertyMappings>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:FileCapture">
+                <cv:FileName>R:\UusisaariU\PROCESSED_DATA_BACKUPS\nRIM_MEMBERS\Salvo\flir_cameras\M322_336\19April2024\top_cam\M332_L_Pulses8p5mW_Tilt_4mm-04192024143921-0000.avi</cv:FileName>
+                <cv:PlaybackRate>0</cv:PlaybackRate>
+                <cv:StartPosition>0</cv:StartPosition>
+                <cv:PositionUnits>Frames</cv:PositionUnits>
+                <cv:Loop>false</cv:Loop>
+                <cv:Playing>true</cv:Playing>
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:Crop">
+                <cv:RegionOfInterest>
+                  <cv:X>32</cv:X>
+                  <cv:Y>0</cv:Y>
+                  <cv:Width>415</cv:Width>
+                  <cv:Height>446</cv:Height>
+                </cv:RegionOfInterest>
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:ConvertColor">
+                <cv:Conversion>Rgb2Gray</cv:Conversion>
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:HsvThreshold">
+                <cv:Lower>
+                  <cv:Val0>0</cv:Val0>
+                  <cv:Val1>255</cv:Val1>
+                  <cv:Val2>255</cv:Val2>
+                  <cv:Val3>0</cv:Val3>
+                </cv:Lower>
+                <cv:Upper>
+                  <cv:Val0>69</cv:Val0>
+                  <cv:Val1>255</cv:Val1>
+                  <cv:Val2>64</cv:Val2>
+                  <cv:Val3>0</cv:Val3>
+                </cv:Upper>
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:FindContours">
+                <cv:Mode>External</cv:Mode>
+                <cv:Method>ChainApproxNone</cv:Method>
+                <cv:Offset>
+                  <cv:X>0</cv:X>
+                  <cv:Y>0</cv:Y>
+                </cv:Offset>
+                <cv:MinArea>1100</cv:MinArea>
+                <cv:MaxArea xsi:nil="true" />
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:BinaryRegionAnalysis" />
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:LargestBinaryRegion" />
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:BinaryRegionExtremes">
+                <cv:Method>MajorAxisVertex</cv:Method>
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="ipy:PythonTransform">
+              <ipy:Name>StableOrientation</ipy:Name>
+              <ipy:Description>Orientation is stable,but  head and tail may be (stablelized) switched</ipy:Description>
+              <ipy:Script>import clr
+clr.AddReference("OpenCV.Net")
+from System import Tuple, Math, Single
+from OpenCV.Net import Point2f
+
+head = None
+tail = None
+centroid = None
+headConfidence = 0
+
+
+def calccentroid(pt1,pt2):
+  cx = (pt2.X + pt1.X)/2
+  cy = (pt2.Y + pt1.Y)/2
+  return Point2f(cx,cy)
+
+def distancesquare(pt1,pt2):
+  dx = (pt2.X - pt1.X)
+  dy = (pt2.Y - pt1.Y)
+  return dx * dx + dy * dy
+
+def angleline(pt1,pt2):
+  dx = (pt2.X - pt1.X)
+  dy = (pt2.Y - pt1.Y)
+  return Math.Atan2(dy, dx)
+
+@returns(Single)
+def process(value):
+  global head, tail, centroid
+  pt1 = value.Item1
+  pt2 = value.Item2
+  
+  # INVALID POINT
+  if pt1.X == Single(float.NaN):
+    #Clear Tracking History
+    #head = None 
+    #tail = None
+    #centroid = None
+    #return new Point2f(float.NaN,float.NaN)
+    # Maintain Tracking History State
+    if (head is None):
+      return Point2f(float.NaN,float.NaN)
+    else:
+      return head
+  
+  # VALID POINT
+  else:
+    if (head is None):
+      #Random Tail&lt;-&gt;Head Initialization 
+      head = pt1
+      tail = pt2
+    else:
+      movevector = calccentroid(pt1,pt2) - centroid
+      #if (head - centroid)
+      # matching old points with new points by also taking acount the vector of movement.
+      if ( (distancesquare(pt1, head + movevector) + distancesquare(pt2, tail + movevector)) &lt; 
+           (distancesquare(pt2, head + movevector) + distancesquare(pt1, tail + movevector)) ):
+        head = pt1
+        tail = pt2
+      # points are switched
+      else:
+        head = pt2
+        tail = pt1
+    centroid = calccentroid(pt1,pt2)
+    return (angleline(head,tail)*180)/3.14</ipy:Script>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="cv:Centroid" />
+            </Expression>
+            <Expression xsi:type="MemberSelector">
+              <Selector>X</Selector>
+            </Expression>
+            <Expression xsi:type="MemberSelector">
+              <Selector>Y</Selector>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="rx:Zip" />
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:Crop">
+                  <cv:RegionOfInterest>
+                    <cv:X>21</cv:X>
+                    <cv:Y>1</cv:Y>
+                    <cv:Width>109</cv:Width>
+                    <cv:Height>539</cv:Height>
+                  </cv:RegionOfInterest>
+                </Combinator>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:ConvertColor">
+                  <cv:Conversion>Rgb2Gray</cv:Conversion>
+                </Combinator>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:HsvThreshold">
+                  <cv:Lower>
+                    <cv:Val0>0</cv:Val0>
+                    <cv:Val1>255</cv:Val1>
+                    <cv:Val2>255</cv:Val2>
+                    <cv:Val3>0</cv:Val3>
+                  </cv:Lower>
+                  <cv:Upper>
+                    <cv:Val0>30</cv:Val0>
+                    <cv:Val1>255</cv:Val1>
+                    <cv:Val2>102</cv:Val2>
+                    <cv:Val3>0</cv:Val3>
+                  </cv:Upper>
+                </Combinator>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:FindContours">
+                  <cv:Mode>External</cv:Mode>
+                  <cv:Method>ChainApproxNone</cv:Method>
+                  <cv:Offset>
+                    <cv:X>0</cv:X>
+                    <cv:Y>0</cv:Y>
+                  </cv:Offset>
+                  <cv:MinArea>1700</cv:MinArea>
+                  <cv:MaxArea xsi:nil="true" />
+                </Combinator>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:BinaryRegionAnalysis" />
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:LargestBinaryRegion" />
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="cv:Centroid" />
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="MemberSelector">
+                <Selector>X</Selector>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="MemberSelector">
+                <Selector>Y</Selector>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="Combinator">
+                <Combinator xsi:type="rx:Zip" />
+              </Builder>
+            </Expression>
+            <Expression xsi:type="Disable">
+              <Builder xsi:type="ipy:PythonTransform">
+                <ipy:Script>import clr
+clr.AddReference("OpenTK")
+from OpenTK import Vector3
+
+@returns(float)
+def process(value):
+  p = Vector3(value.Item1, value.Item2, 0)
+  line0 = Vector3(122, 1, 0)
+  line1 = Vector3(127.5, 526, 0)
+  return Vector3.Cross(p - line0, p - line1).Length / (line1 - line0).Length</ipy:Script>
+              </Builder>
+            </Expression>
+            <Expression xsi:type="SubscribeSubject">
+              <Name>FileName</Name>
+            </Expression>
+            <Expression xsi:type="ExternalizedMapping">
+              <Property Name="Value" DisplayName="saveFolder" />
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="StringProperty">
+                <Value>R:\UusisaariU\PROCESSED_DATA_BACKUPS\nRIM_MEMBERS\Salvo\flir_cameras\M322_336\19April2024\Centroid_XY</Value>
+              </Combinator>
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="rx:Zip" />
+            </Expression>
+            <Expression xsi:type="Combinator">
+              <Combinator xsi:type="rx:Sample" />
+            </Expression>
+            <Expression xsi:type="ipy:PythonTransform">
+              <ipy:Script>from System.IO import Path
+
+@returns(str)
+def process(value):
+  a = value.Item1; #filename
+  b = value.Item2 #path
+  a = Path.GetFileNameWithoutExtension(a) + ".csv"
+  c = Path.Combine(b, Path.GetFileName(a))
+  print c
+  return c</ipy:Script>
+            </Expression>
+            <Expression xsi:type="PropertyMapping">
+              <PropertyMappings>
+                <Property Name="FileName" />
+              </PropertyMappings>
+            </Expression>
+            <Expression xsi:type="io:CsvWriter">
+              <io:FileName>R:\UusisaariU\PROCESSED_DATA_BACKUPS\nRIM_MEMBERS\Salvo\flir_cameras\M322_336\19April2024\Centroid_XY\M332_L_Pulses8p5mW_Tilt_4mm-04192024143921-0000.csv</io:FileName>
+              <io:Append>false</io:Append>
+              <io:Overwrite>false</io:Overwrite>
+              <io:Suffix>None</io:Suffix>
+              <io:IncludeHeader>false</io:IncludeHeader>
+            </Expression>
+            <Expression xsi:type="WorkflowOutput" />
+            <Expression xsi:type="WorkflowInput">
+              <Name>Source1</Name>
+            </Expression>
+            <Expression xsi:type="rx:ReplaySubject">
+              <Name>FileName</Name>
+              <rx:BufferSize xsi:nil="true" />
+            </Expression>
+          </Nodes>
+          <Edges>
+            <Edge From="0" To="1" Label="Source1" />
+            <Edge From="1" To="2" Label="Source1" />
+            <Edge From="2" To="3" Label="Source1" />
+            <Edge From="3" To="4" Label="Source1" />
+            <Edge From="4" To="5" Label="Source1" />
+            <Edge From="5" To="6" Label="Source1" />
+            <Edge From="6" To="7" Label="Source1" />
+            <Edge From="7" To="8" Label="Source1" />
+            <Edge From="8" To="9" Label="Source1" />
+            <Edge From="8" To="11" Label="Source1" />
+            <Edge From="9" To="10" Label="Source1" />
+            <Edge From="10" To="14" Label="Source3" />
+            <Edge From="11" To="12" Label="Source1" />
+            <Edge From="11" To="13" Label="Source1" />
+            <Edge From="12" To="14" Label="Source1" />
+            <Edge From="13" To="14" Label="Source2" />
+            <Edge From="14" To="15" Label="Source1" />
+            <Edge From="15" To="16" Label="Source1" />
+            <Edge From="16" To="17" Label="Source1" />
+            <Edge From="17" To="18" Label="Source1" />
+            <Edge From="18" To="19" Label="Source1" />
+            <Edge From="19" To="20" Label="Source1" />
+            <Edge From="20" To="21" Label="Source1" />
+            <Edge From="21" To="22" Label="Source1" />
+            <Edge From="21" To="23" Label="Source1" />
+            <Edge From="22" To="24" Label="Source1" />
+            <Edge From="23" To="24" Label="Source2" />
+            <Edge From="24" To="25" Label="Source1" />
+            <Edge From="25" To="33" Label="Source2" />
+            <Edge From="26" To="29" Label="Source1" />
+            <Edge From="26" To="30" Label="Source2" />
+            <Edge From="27" To="28" Label="Source1" />
+            <Edge From="28" To="29" Label="Source2" />
+            <Edge From="29" To="30" Label="Source1" />
+            <Edge From="30" To="31" Label="Source1" />
+            <Edge From="31" To="32" Label="Source1" />
+            <Edge From="32" To="33" Label="Source1" />
+            <Edge From="33" To="34" Label="Source1" />
+            <Edge From="35" To="36" Label="Source1" />
+          </Edges>
+        </Workflow>
+      </Expression>
+      <Expression xsi:type="Combinator">
+        <Combinator xsi:type="rx:Concat" />
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:FileCapture">
+            <cv:FileName>Z:\UusisaariU\RAW_BACKUPS\Flir cameras\Recording\Ridge_opto_M323_336_March2024\ORE_M322-336_OpenField_8p5mW_L_R_4mm_20April2024\top_cam\M323_L_OF1-04202024130501-0000.avi</cv:FileName>
+            <cv:PlaybackRate>0</cv:PlaybackRate>
+            <cv:StartPosition>0</cv:StartPosition>
+            <cv:PositionUnits>Frames</cv:PositionUnits>
+            <cv:Loop>false</cv:Loop>
+            <cv:Playing>false</cv:Playing>
+          </Combinator>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:Crop">
+            <cv:RegionOfInterest>
+              <cv:X>32</cv:X>
+              <cv:Y>0</cv:Y>
+              <cv:Width>415</cv:Width>
+              <cv:Height>446</cv:Height>
+            </cv:RegionOfInterest>
+          </Combinator>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:ConvertColor">
+            <cv:Conversion>Rgb2Gray</cv:Conversion>
+          </Combinator>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:HsvThreshold">
+            <cv:Lower>
+              <cv:Val0>0</cv:Val0>
+              <cv:Val1>255</cv:Val1>
+              <cv:Val2>255</cv:Val2>
+              <cv:Val3>0</cv:Val3>
+            </cv:Lower>
+            <cv:Upper>
+              <cv:Val0>69</cv:Val0>
+              <cv:Val1>255</cv:Val1>
+              <cv:Val2>64</cv:Val2>
+              <cv:Val3>0</cv:Val3>
+            </cv:Upper>
+          </Combinator>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:FindContours">
+            <cv:Mode>External</cv:Mode>
+            <cv:Method>ChainApproxNone</cv:Method>
+            <cv:Offset>
+              <cv:X>0</cv:X>
+              <cv:Y>0</cv:Y>
+            </cv:Offset>
+            <cv:MinArea>1100</cv:MinArea>
+            <cv:MaxArea xsi:nil="true" />
+          </Combinator>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:BinaryRegionAnalysis" />
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:LargestBinaryRegion" />
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:BinaryRegionExtremes">
+            <cv:Method>MajorAxisVertex</cv:Method>
+          </Combinator>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="ipy:PythonTransform">
+          <ipy:Name>StableOrientation</ipy:Name>
+          <ipy:Description>Orientation is stable,but  head and tail may be (stablelized) switched</ipy:Description>
+          <ipy:Script>import clr
+clr.AddReference("OpenCV.Net")
+from System import Tuple, Math, Single
+from OpenCV.Net import Point2f
+
+head = None
+tail = None
+centroid = None
+headConfidence = 0
+
+
+def calccentroid(pt1,pt2):
+  cx = (pt2.X + pt1.X)/2
+  cy = (pt2.Y + pt1.Y)/2
+  return Point2f(cx,cy)
+
+def distancesquare(pt1,pt2):
+  dx = (pt2.X - pt1.X)
+  dy = (pt2.Y - pt1.Y)
+  return dx * dx + dy * dy
+
+def angleline(pt1,pt2):
+  dx = (pt2.X - pt1.X)
+  dy = (pt2.Y - pt1.Y)
+  return Math.Atan2(dy, dx)
+
+@returns(Single)
+def process(value):
+  global head, tail, centroid
+  pt1 = value.Item1
+  pt2 = value.Item2
+  
+  # INVALID POINT
+  if pt1.X == Single(float.NaN):
+    #Clear Tracking History
+    #head = None 
+    #tail = None
+    #centroid = None
+    #return new Point2f(float.NaN,float.NaN)
+    # Maintain Tracking History State
+    if (head is None):
+      return Point2f(float.NaN,float.NaN)
+    else:
+      return head
+  
+  # VALID POINT
+  else:
+    if (head is None):
+      #Random Tail&lt;-&gt;Head Initialization 
+      head = pt1
+      tail = pt2
+    else:
+      movevector = calccentroid(pt1,pt2) - centroid
+      #if (head - centroid)
+      # matching old points with new points by also taking acount the vector of movement.
+      if ( (distancesquare(pt1, head + movevector) + distancesquare(pt2, tail + movevector)) &lt; 
+           (distancesquare(pt2, head + movevector) + distancesquare(pt1, tail + movevector)) ):
+        head = pt1
+        tail = pt2
+      # points are switched
+      else:
+        head = pt2
+        tail = pt1
+    centroid = calccentroid(pt1,pt2)
+    return (angleline(head,tail)*180)/3.14</ipy:Script>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="cv:Centroid" />
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="MemberSelector">
+          <Selector>X</Selector>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="MemberSelector">
+          <Selector>Y</Selector>
+        </Builder>
+      </Expression>
+      <Expression xsi:type="Disable">
+        <Builder xsi:type="Combinator">
+          <Combinator xsi:type="rx:Zip" />
+        </Builder>
+      </Expression>
+    </Nodes>
+    <Edges>
+      <Edge From="0" To="4" Label="Source2" />
+      <Edge From="1" To="2" Label="Source1" />
+      <Edge From="2" To="3" Label="Source1" />
+      <Edge From="3" To="4" Label="Source1" />
+      <Edge From="4" To="5" Label="Source1" />
+      <Edge From="6" To="7" Label="Source1" />
+      <Edge From="7" To="8" Label="Source1" />
+      <Edge From="8" To="9" Label="Source1" />
+      <Edge From="9" To="10" Label="Source1" />
+      <Edge From="10" To="11" Label="Source1" />
+      <Edge From="11" To="12" Label="Source1" />
+      <Edge From="12" To="13" Label="Source1" />
+      <Edge From="12" To="15" Label="Source1" />
+      <Edge From="13" To="14" Label="Source1" />
+      <Edge From="14" To="18" Label="Source3" />
+      <Edge From="15" To="16" Label="Source1" />
+      <Edge From="15" To="17" Label="Source1" />
+      <Edge From="16" To="18" Label="Source1" />
+      <Edge From="17" To="18" Label="Source2" />
+    </Edges>
+  </Workflow>
+</WorkflowBuilder>
